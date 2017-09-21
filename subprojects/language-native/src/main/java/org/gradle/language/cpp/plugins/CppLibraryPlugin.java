@@ -16,6 +16,7 @@
 
 package org.gradle.language.cpp.plugins;
 
+import com.google.common.collect.ImmutableSet;
 import org.gradle.api.Action;
 import org.gradle.api.Incubating;
 import org.gradle.api.Plugin;
@@ -25,6 +26,7 @@ import org.gradle.api.artifacts.ConfigurationContainer;
 import org.gradle.api.attributes.Usage;
 import org.gradle.api.file.DirectoryVar;
 import org.gradle.api.file.RegularFile;
+import org.gradle.api.internal.artifacts.publish.ArchivePublishArtifact;
 import org.gradle.api.internal.file.FileOperations;
 import org.gradle.api.internal.project.ProjectInternal;
 import org.gradle.api.model.ObjectFactory;
@@ -32,14 +34,14 @@ import org.gradle.api.plugins.AppliedPlugin;
 import org.gradle.api.provider.Provider;
 import org.gradle.api.provider.ProviderFactory;
 import org.gradle.api.publish.PublishingExtension;
-import org.gradle.api.publish.maven.MavenArtifact;
 import org.gradle.api.publish.maven.MavenPublication;
 import org.gradle.api.tasks.TaskContainer;
 import org.gradle.api.tasks.bundling.Zip;
 import org.gradle.language.base.plugins.LifecycleBasePlugin;
 import org.gradle.language.cpp.CppLibrary;
 import org.gradle.language.cpp.internal.DefaultCppLibrary;
-import org.gradle.language.cpp.internal.NativeVariant;
+import org.gradle.language.cpp.internal.MainLibraryVariant;
+import org.gradle.language.cpp.internal.NativeRuntimeVariant;
 import org.gradle.nativeplatform.platform.internal.NativePlatformInternal;
 import org.gradle.nativeplatform.tasks.LinkSharedLibrary;
 import org.gradle.nativeplatform.toolchain.internal.NativeToolChainInternal;
@@ -122,10 +124,11 @@ public class CppLibraryPlugin implements Plugin<ProjectInternal> {
         // TODO - add lifecycle tasks
         // TODO - extract some common code to setup the configurations
 
-        Configuration apiElements = configurations.create("cppApiElements");
+        final Usage apiUsage = objectFactory.named(Usage.class, Usage.C_PLUS_PLUS_API);
+        final Configuration apiElements = configurations.create("cppApiElements");
         apiElements.extendsFrom(library.getApiDependencies());
         apiElements.setCanBeResolved(false);
-        apiElements.getAttributes().attribute(Usage.USAGE_ATTRIBUTE, objectFactory.named(Usage.class, Usage.C_PLUS_PLUS_API));
+        apiElements.getAttributes().attribute(Usage.USAGE_ATTRIBUTE, apiUsage);
         // TODO - deal with more than one header dir, e.g. generated public headers
         Provider<File> publicHeaders = providers.provider(new Callable<File>() {
             @Override
@@ -191,7 +194,10 @@ public class CppLibraryPlugin implements Plugin<ProjectInternal> {
                 headersZip.from(library.getPublicHeaderFiles());
                 // TODO - should track changes to build directory
                 headersZip.setDestinationDir(new File(project.getBuildDir(), "headers"));
+                headersZip.setClassifier("cpp-api-headers");
                 headersZip.setArchiveName("cpp-api-headers.zip");
+
+                final MainLibraryVariant mainVariant = new MainLibraryVariant("api", apiUsage, ImmutableSet.of(new ArchivePublishArtifact(headersZip)), apiElements);
 
                 project.getExtensions().configure(PublishingExtension.class, new Action<PublishingExtension>() {
                     @Override
@@ -199,33 +205,36 @@ public class CppLibraryPlugin implements Plugin<ProjectInternal> {
                         extension.getPublications().create("main", MavenPublication.class, new Action<MavenPublication>() {
                             @Override
                             public void execute(MavenPublication publication) {
-                                // TODO - should track changes to properties
+                                // TODO - should track changes to these properties
                                 publication.setGroupId(project.getGroup().toString());
                                 publication.setArtifactId(library.getBaseName().get());
                                 publication.setVersion(project.getVersion().toString());
-                                MavenArtifact headersArtifact = publication.artifact(headersZip);
-                                headersArtifact.setClassifier("cpp-api-headers");
+                                // TODO - don't use internal types
+                                publication.from(mainVariant);
                             }
                         });
                         extension.getPublications().create("debug", MavenPublication.class, new Action<MavenPublication>() {
                             @Override
                             public void execute(MavenPublication publication) {
-                                // TODO - should track changes to properties
+                                // TODO - should track changes to these properties
                                 publication.setGroupId(project.getGroup().toString());
                                 publication.setArtifactId(library.getBaseName().get() + "_debug");
                                 publication.setVersion(project.getVersion().toString());
-                                // TODO - have publishing better deal with an artifact that can have multiple usages
-                                publication.from(new NativeVariant("debug", linkUsage, debugLinkElements, runtimeUsage, debugRuntimeElements));
+                                NativeRuntimeVariant debugVariant = new NativeRuntimeVariant("debug", mainVariant, linkUsage, debugLinkElements, runtimeUsage, debugRuntimeElements);
+                                mainVariant.addVariant(debugVariant);
+                                publication.from(debugVariant);
                             }
                         });
                         extension.getPublications().create("release", MavenPublication.class, new Action<MavenPublication>() {
                             @Override
                             public void execute(MavenPublication publication) {
-                                // TODO - should track changes to properties
+                                // TODO - should track changes to these properties
                                 publication.setGroupId(project.getGroup().toString());
                                 publication.setArtifactId(library.getBaseName().get() + "_release");
                                 publication.setVersion(project.getVersion().toString());
-                                publication.from(new NativeVariant("release", linkUsage, releaseLinkElements, runtimeUsage, releaseRuntimeElements));
+                                NativeRuntimeVariant releaseVariant = new NativeRuntimeVariant("release", mainVariant, linkUsage, releaseLinkElements, runtimeUsage, releaseRuntimeElements);
+                                mainVariant.addVariant(releaseVariant);
+                                publication.from(releaseVariant);
                             }
                         });
                     }

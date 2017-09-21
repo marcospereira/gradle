@@ -22,66 +22,93 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * A clock that measures time based on elapsed time since an initial system wall clock read and never goes backwards.
+ * A clock that is guaranteed to not go backwards.
  * <p>
- * This provider guarantees that non concurrent reads always yield a value that is greater or equal than the previous read.
- * This monotonicity guarantee is important to build scans.
+ * It aims to strike a balance between never going backwards (allowing timestamps to represent causality)
+ * and keeping in sync with the system wall clock so that time values make sense in comparison with the system wall clock,
+ * including timestamps generated from other processes.
  * <p>
- * While System.nanoTime() is usually monotonic it is not actually guaranteed, especially on virtualized hardware.
- *
- * - http://bugs.java.com/bugdatabase/view_bug.do?bug_id=6458294
- *
- * @see Time#clock()
+ * This clock effectively measures time by duration (according to System.nanoTime()),
+ * in between syncs with the system wall clock.
+ * When issuing the first timestamp after the sync interval has expired,
+ * The system wall clock will be read, and the current time set to the max of wall clock time or the most recently issued timestamp.
+ * All other timestamps are calculated as the wall clock time at last sync + elapsed time since.
+ * <p>
+ * This clock deals relatively well when the system wall clock shift is adjusted by small amounts.
+ * It also deals relatively well when the system wall clock jumps forward by large amounts (this clock will jump with it).
+ * It does not deal as well with large jumps back in time.
+ * <p>
+ * When the system wall clock jumps back in time, this clock will effectively slow down until it is back in sync.
+ * All syncing timestamps will be the same as the previously issued timestamp.
+ * The rate by which this clock slows, and therefore the time it takes to resync,
+ * is determined by how frequently the clock is read.
+ * If timestamps are only requested at a rate greater than the sync interval,
+ * all timestamps will have the same value until the clocks synchronize (i.e. this clock will pause).
+ * If timestamps are requested more frequently than the sync interval,
+ * timestamps before and after the sync point will under represent the actual elapsed time,
+ * gradually bringing the clocks back into sync.
  */
-public class MonotonicClock implements Clock {
+class MonotonicClock implements Clock {
 
+    private static final long SYNC_INTERVAL_MILLIS = TimeUnit.SECONDS.toMillis(3);
+
+    private final long syncIntervalMillis;
     private final TimeSource timeSource;
-    private final long startMillis;
-    private final long startNanos;
 
-    private final AtomicLong max = new AtomicLong();
+    private final AtomicLong syncMillisRef;
+    private final AtomicLong syncNanosRef;
+    private final AtomicLong max = new AtomicLong(0);
 
-    public MonotonicClock() {
-        this(new TimeSource.True());
+    MonotonicClock() {
+        this(TimeSource.SYSTEM, SYNC_INTERVAL_MILLIS);
     }
 
     @VisibleForTesting
-    MonotonicClock(TimeSource timeSource) {
+    MonotonicClock(TimeSource timeSource, long syncIntervalMillis) {
+        long nanoTime = timeSource.nanoTime();
+        long currentTimeMillis = timeSource.currentTimeMillis();
+
         this.timeSource = timeSource;
-        this.startMillis = timeSource.currentTimeMillis();
-        this.startNanos = timeSource.nanoTime();
+        this.syncIntervalMillis = syncIntervalMillis;
+        this.syncNanosRef = new AtomicLong(nanoTime);
+        this.syncMillisRef = new AtomicLong(currentTimeMillis);
+        this.max.set(currentTimeMillis);
     }
 
-    @Override
     public long getCurrentTime() {
-        long elapsedMills = TimeUnit.NANOSECONDS.toMillis(timeSource.nanoTime() - startNanos);
-        long currentTime = startMillis + elapsedMills;
-        long currentMax;
-        do {
-            currentMax = max.get();
-            currentTime = Math.max(currentTime, currentMax);
-        } while (!max.compareAndSet(currentMax, currentTime));
+        long nowNanos = timeSource.nanoTime();
+        long syncNanos = syncNanosRef.get();
+        long syncMillis = syncMillisRef.get();
+        long sinceSyncNanos = nowNanos - syncNanos;
+        long sinceSyncMillis = TimeUnit.NANOSECONDS.toMillis(sinceSyncNanos);
 
-        return currentTime;
-    }
-
-    interface TimeSource {
-
-        long currentTimeMillis();
-
-        long nanoTime();
-
-        class True implements TimeSource {
-            @Override
-            public long currentTimeMillis() {
-                return System.currentTimeMillis();
-            }
-
-            @Override
-            public long nanoTime() {
-                return System.nanoTime();
-            }
+        if (syncIsDue(nowNanos, syncNanos, sinceSyncMillis)) {
+            return sync(syncMillis);
+        } else {
+            return advance(syncMillis + sinceSyncMillis);
         }
-
     }
+
+    private boolean syncIsDue(long nowNanos, long syncNanos, long sinceSyncMillis) {
+        return sinceSyncMillis >= syncIntervalMillis && syncNanosRef.compareAndSet(syncNanos, nowNanos);
+    }
+
+    private long sync(long syncMillis) {
+        long newSyncMillis = advance(timeSource.currentTimeMillis());
+        // CAS due to potentially a later, but overlapping, sync having already completed
+        syncMillisRef.compareAndSet(syncMillis, newSyncMillis);
+        return newSyncMillis;
+    }
+
+    private long advance(long timestamp) {
+        long prev;
+        long next;
+        do {
+            prev = max.get();
+            next = Math.max(prev, timestamp);
+        } while (!max.compareAndSet(prev, next));
+
+        return next;
+    }
+
 }

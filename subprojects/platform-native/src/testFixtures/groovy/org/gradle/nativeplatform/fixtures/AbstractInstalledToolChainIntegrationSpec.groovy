@@ -20,10 +20,11 @@ import org.gradle.api.internal.file.BaseDirFileResolver
 import org.gradle.api.internal.file.TestFiles
 import org.gradle.integtests.fixtures.AbstractIntegrationSpec
 import org.gradle.internal.os.OperatingSystem
-import org.gradle.internal.time.TrueClock
+import org.gradle.internal.time.Time
 import org.gradle.nativeplatform.internal.CompilerOutputFileNamingSchemeFactory
 import org.gradle.test.fixtures.file.TestFile
 import org.junit.runner.RunWith
+
 /**
  * Runs a test separately for each installed tool chain.
  */
@@ -53,7 +54,7 @@ allprojects { p ->
         return new NativeInstallationFixture(file(installDir), os)
     }
 
-    def String withExecutableSuffix(Object path) {
+    def String executableName(Object path) {
         return path + OperatingSystem.current().getExecutableSuffix()
     }
 
@@ -78,12 +79,20 @@ allprojects { p ->
         return path + OperatingSystem.current().linkLibrarySuffix
     }
 
+    def String linkLibraryName(Object path) {
+        return OperatingSystem.current().getLinkLibraryName(path.toString())
+    }
+
     def String getLinkLibrarySuffix() {
         return OperatingSystem.current().linkLibrarySuffix.substring(1)
     }
 
     def String withSharedLibrarySuffix(Object path) {
         return path + OperatingSystem.current().sharedLibrarySuffix
+    }
+
+    def String sharedLibraryName(Object path) {
+        return OperatingSystem.current().getSharedLibraryName(path.toString())
     }
 
     def String getSharedLibraryExtension() {
@@ -116,7 +125,7 @@ allprojects { p ->
 
     protected void maybeWait() {
         if (toolChain.visualCpp) {
-            def now = new TrueClock().getCurrentTime()
+            def now = Time.clock().currentTime
             def nextSecond = now % 1000
             Thread.sleep(1200 - nextSecond)
         }

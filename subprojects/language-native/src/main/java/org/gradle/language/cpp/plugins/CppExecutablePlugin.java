@@ -34,7 +34,8 @@ import org.gradle.language.base.plugins.LifecycleBasePlugin;
 import org.gradle.language.cpp.CppApplication;
 import org.gradle.language.cpp.CppComponent;
 import org.gradle.language.cpp.internal.DefaultCppApplication;
-import org.gradle.language.cpp.internal.NativeVariant;
+import org.gradle.language.cpp.internal.MainExecutableVariant;
+import org.gradle.language.cpp.internal.NativeRuntimeVariant;
 import org.gradle.nativeplatform.tasks.InstallExecutable;
 import org.gradle.nativeplatform.tasks.LinkExecutable;
 
@@ -111,36 +112,42 @@ public class CppExecutablePlugin implements Plugin<ProjectInternal> {
         project.getPluginManager().withPlugin("maven-publish", new Action<AppliedPlugin>() {
             @Override
             public void execute(AppliedPlugin appliedPlugin) {
+                final MainExecutableVariant mainVariant = new MainExecutableVariant();
                 project.getExtensions().configure(PublishingExtension.class, new Action<PublishingExtension>() {
                     @Override
                     public void execute(PublishingExtension extension) {
                         extension.getPublications().create("main", MavenPublication.class, new Action<MavenPublication>() {
                             @Override
                             public void execute(MavenPublication publication) {
-                                // TODO - should track changes to properties
+                                // TODO - should track changes to these properties
                                 publication.setGroupId(project.getGroup().toString());
                                 publication.setArtifactId(application.getBaseName().get());
                                 publication.setVersion(project.getVersion().toString());
+                                publication.from(mainVariant);
                             }
                         });
                         extension.getPublications().create("debug", MavenPublication.class, new Action<MavenPublication>() {
                             @Override
                             public void execute(MavenPublication publication) {
-                                // TODO - should track changes to properties
+                                // TODO - should track changes to these properties
                                 publication.setGroupId(project.getGroup().toString());
                                 publication.setArtifactId(application.getBaseName().get() + "_debug");
                                 publication.setVersion(project.getVersion().toString());
-                                publication.from(new NativeVariant("debug", null, null, runtimeUsage, debugRuntimeElements));
+                                NativeRuntimeVariant debugVariant = new NativeRuntimeVariant("debug", mainVariant, runtimeUsage, debugRuntimeElements.getAllArtifacts(), debugRuntimeElements);
+                                mainVariant.addVariant(debugVariant);
+                                publication.from(debugVariant);
                             }
                         });
                         extension.getPublications().create("release", MavenPublication.class, new Action<MavenPublication>() {
                             @Override
                             public void execute(MavenPublication publication) {
-                                // TODO - should track changes to properties
+                                // TODO - should track changes to these properties
                                 publication.setGroupId(project.getGroup().toString());
                                 publication.setArtifactId(application.getBaseName().get() + "_release");
                                 publication.setVersion(project.getVersion().toString());
-                                publication.from(new NativeVariant("release", null, null, runtimeUsage, releaseRuntimeElements));
+                                NativeRuntimeVariant releaseVariant = new NativeRuntimeVariant("release", mainVariant, runtimeUsage, releaseRuntimeElements.getAllArtifacts(), releaseRuntimeElements);
+                                mainVariant.addVariant(releaseVariant);
+                                publication.from(releaseVariant);
                             }
                         });
                     }
