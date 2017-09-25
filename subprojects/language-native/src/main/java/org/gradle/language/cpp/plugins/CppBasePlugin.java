@@ -18,6 +18,7 @@ package org.gradle.language.cpp.plugins;
 
 import org.gradle.api.Action;
 import org.gradle.api.Incubating;
+import org.gradle.api.NonNullApi;
 import org.gradle.api.Plugin;
 import org.gradle.api.Task;
 import org.gradle.api.file.DirectoryVar;
@@ -34,6 +35,7 @@ import org.gradle.language.cpp.CppExecutable;
 import org.gradle.language.cpp.CppSharedLibrary;
 import org.gradle.language.cpp.tasks.CppCompile;
 import org.gradle.language.nativeplatform.internal.Names;
+import org.gradle.language.nativeplatform.tasks.DiscoverInputsTask;
 import org.gradle.model.internal.registry.ModelRegistry;
 import org.gradle.nativeplatform.platform.internal.DefaultNativePlatform;
 import org.gradle.nativeplatform.tasks.InstallExecutable;
@@ -53,6 +55,7 @@ import java.util.concurrent.Callable;
  * @since 4.1
  */
 @Incubating
+@NonNullApi
 public class CppBasePlugin implements Plugin<ProjectInternal> {
     @Override
     public void apply(ProjectInternal project) {
@@ -85,6 +88,13 @@ public class CppBasePlugin implements Plugin<ProjectInternal> {
                 // TODO - make this lazy
                 NativeToolChain toolChain = modelRegistry.realize("toolChains", NativeToolChainRegistryInternal.class).getForPlatform(currentPlatform);
                 compile.setToolChain(toolChain);
+
+                DiscoverInputsTask discoverInputs = tasks.create(names.getTaskName("discoverInputs"), DiscoverInputsTask.class);
+                discoverInputs.source(compile.getSource());
+                discoverInputs.includes(compile.getIncludes());
+                discoverInputs.getDiscoveredInputs().set(buildDirectory.file("discoveredInputs/" + names.getDirName() + "inputs.txt"));
+                compile.getDiscoveredInputs().set(discoverInputs.getDiscoveredInputs());
+                compile.dependsOn(discoverInputs);
 
                 if (binary instanceof CppExecutable) {
                     // Add a link task
